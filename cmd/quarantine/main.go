@@ -25,11 +25,14 @@ func main() {
 		panic(err.Error())
 	}
 
+	// set up the evaluator and node client, and kick them off
 	evaluator := node.NewEvaluator(config)
 	nodeClient := node.NewNodeClient(clientSet.CoreV1().Nodes(), config)
 	go func() {
 		runForever(evaluator, nodeClient, config)
 	}()
+
+	// TODO add liveness & readiness checks, and metrics endpoint for prometheus
 }
 
 func runForever(evaluator node.Evaluator, nodeClient node.Client, config config.Settings) {
