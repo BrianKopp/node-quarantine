@@ -10,4 +10,6 @@ type Settings struct {
 	EvaluationPeriod     time.Duration
 	DelayAfterError      time.Duration
 	DelayAfterCordon     time.Duration
+	DryRun               bool
+	MinNodes             int
 }

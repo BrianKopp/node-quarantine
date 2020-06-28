@@ -22,6 +22,8 @@ func main() {
 	errorBackoffPtr := flag.Int("error-backoff", 300, "the time (s) between evaluations if an error occurs")
 	cordonDelayPtr := flag.Int("cordon-backoff", 120, "the sleep time (s) after cordoning a node")
 	debugPtr := flag.Bool("debug", false, "use debug logs")
+	dryRunPtr := flag.Bool("dry-run", false, "whether to run in dry run mode")
+	minNodesPtr := flag.Int("min-nodes", 5, "the minimum number of nodes, skip evaluation if at or below this level")
 	flag.Parse()
 
 	config := config.Settings{
@@ -31,6 +33,8 @@ func main() {
 		EvaluationPeriod:     time.Duration(*evaluationPtr) * time.Second,
 		DelayAfterError:      time.Duration(*errorBackoffPtr) * time.Second,
 		DelayAfterCordon:     time.Duration(*cordonDelayPtr) * time.Second,
+		DryRun:               *dryRunPtr,
+		MinNodes:             *minNodesPtr,
 	}
 
 	// set up logging
@@ -80,7 +84,7 @@ func runForever(evaluator node.Evaluator, nodeClient node.Client, config config.
 			log.Info().Msg("did cordon node")
 			time.Sleep(config.DelayAfterCordon)
 		} else {
-			log.Info().Msg("did not cordon node")
+			log.Info().Msg("did not cordon any node")
 			time.Sleep(config.EvaluationPeriod)
 		}
 	}
@@ -92,6 +96,12 @@ func runSingleEvaluation(evaluator node.Evaluator, nodeClient node.Client, confi
 		log.Error().Err(err).Msg("error listing nodes")
 		return false, err
 	}
+
+	if len(nodes.Items) <= config.MinNodes {
+		log.Info().Int("numNodes", len(nodes.Items)).Msg("num nodes at minimum, skip evaluation")
+		return false, nil
+	}
+
 	utilizations := node.GetNodeUtilizations(nodes)
 	log.Info().Msg("acquired node utilizations")
 	for _, util := range utilizations {
