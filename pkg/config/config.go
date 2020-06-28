@@ -2,6 +2,7 @@ package config
 
 import "time"
 
+// Settings holds application settings
 type Settings struct {
 	LabelSelector        string
 	UtilizationThreshold float64
@@ -9,12 +10,4 @@ type Settings struct {
 	EvaluationPeriod     time.Duration
 	DelayAfterError      time.Duration
 	DelayAfterCordon     time.Duration
-}
-
-func NewFromEnv() Settings {
-	return Settings{
-		LabelSelector:        "",
-		UtilizationThreshold: 0.5,
-		UnusedAge:            10 * time.Minute,
-	}
 }
