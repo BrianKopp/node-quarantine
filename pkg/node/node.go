@@ -18,17 +18,19 @@ import (
 type Client interface {
 	ListNodes() (*v1.NodeList, error)
 	CordonNode(name string) error
+	GetNodeUtilizations(nodes *v1.NodeList) ([]Utilization, error)
 }
 
-// KubernetesClient calls the kubernetes API
-type KubernetesClient struct {
+// kubernetesClient calls the kubernetes API
+type kubernetesClient struct {
 	nodes  corev1.NodeInterface
+	pods   corev1.PodInterface
 	config config.Settings
 }
 
 // NewNodeClient creates a new node client from dependencies
 func NewNodeClient(nodeAPI corev1.NodeInterface, config config.Settings) Client {
-	return &KubernetesClient{
+	return &kubernetesClient{
 		nodes:  nodeAPI,
 		config: config,
 	}
@@ -41,7 +43,7 @@ type cordonPatch struct {
 }
 
 // ListNodes lists kubernetes nodes, filtered for unready, unschedulable, or new nodes
-func (m *KubernetesClient) ListNodes() (*v1.NodeList, error) {
+func (m *kubernetesClient) ListNodes() (*v1.NodeList, error) {
 	nodes, err := m.nodes.List(metaV1.ListOptions{LabelSelector: m.config.LabelSelector})
 	if err != nil {
 		log.Error().Err(err).Msg("error listing nodes")
@@ -50,8 +52,17 @@ func (m *KubernetesClient) ListNodes() (*v1.NodeList, error) {
 	return filterNodeList(nodes, time.Now()), nil
 }
 
+// getPodsOnNode gets pods on node
+func (m *kubernetesClient) getPodsOnNode(name string) (*v1.PodList, error) {
+	pods, err := m.pods.List(metaV1.ListOptions{FieldSelector: fmt.Sprintf("spec.nodeName=%v", name)})
+	if err != nil {
+		return nil, err
+	}
+	return pods, nil
+}
+
 // CordonNode cordons a node
-func (m *KubernetesClient) CordonNode(name string) error {
+func (m *kubernetesClient) CordonNode(name string) error {
 	if m.config.DryRun {
 		log.Info().Msg(fmt.Sprintf("DRY RUN - would have cordoned node %v", name))
 		return nil
@@ -81,8 +92,60 @@ func (m *KubernetesClient) CordonNode(name string) error {
 	return nil
 }
 
+// GetNodeUtilizations calculates the node utilizations. Note this
+// is slightly more conservative than cluster autoscaler, which excludes
+// daemonsets and mirrored pods
+func (m *kubernetesClient) GetNodeUtilizations(nodes *v1.NodeList) ([]Utilization, error) {
+	nodeUtils := []Utilization{}
+
+	for _, node := range nodes.Items {
+		pods, err := m.getPodsOnNode(node.Name)
+		if err != nil {
+			log.Error().Err(err).Str("node", node.Name).Msg("error getting pods on node, couldnt calculate resource usage")
+			continue
+		}
+
+		cpuTotal := float64(0)
+		memTotal := float64(0)
+		for _, pod := range pods.Items {
+			for _, c := range pod.Spec.Containers {
+				cpuRequests := c.Resources.Requests.Cpu()
+				if cpuRequests != nil {
+					cpuTotal += float64(cpuRequests.MilliValue())
+				}
+
+				memRequests := c.Resources.Requests.Memory()
+				if memRequests != nil {
+					memTotal += float64(memRequests.MilliValue())
+				}
+			}
+		}
+
+		util := float64(1)
+		cpuAllocatable := node.Status.Allocatable.Cpu()
+		if cpuAllocatable != nil {
+			cpuAllocMilli := float64(cpuAllocatable.MilliValue())
+			cpuUtil := cpuTotal / cpuAllocMilli
+			if cpuUtil < util {
+				util = cpuUtil
+			}
+		}
+		memAllocatable := node.Status.Allocatable.Memory()
+		if memAllocatable != nil {
+			memAllocMilli := float64(memAllocatable.MilliValue())
+			memUtil := memTotal / memAllocMilli
+			if memUtil < util {
+				util = memUtil
+			}
+		}
+
+		nodeUtils = append(nodeUtils, Utilization{Name: node.Name, MaxUtilization: util})
+	}
+
+	return nodeUtils, nil
+}
+
 // filterNodeList takes a list of nodes and removes those nodes that meet the following conditions
-// * are not ready
 // * are not scheduleable
 // * were created within the last five minutes
 func filterNodeList(nodes *v1.NodeList, now time.Time) *v1.NodeList {
@@ -90,11 +153,6 @@ func filterNodeList(nodes *v1.NodeList, now time.Time) *v1.NodeList {
 	for i := length - 1; i >= 0; i-- {
 		node := nodes.Items[i]
 		remove := false
-
-		if node.Status.Phase != v1.NodeRunning {
-			log.Info().Str("node", node.Name).Msg("node excluded since node phase not Running")
-			remove = true
-		}
 
 		if node.Spec.Unschedulable {
 			log.Info().Str("node", node.Name).Msg("node excluded since unschedulable")

@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/briankopp/node-quarantine/pkg/config"
@@ -11,7 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
@@ -24,6 +26,7 @@ func main() {
 	debugPtr := flag.Bool("debug", false, "use debug logs")
 	dryRunPtr := flag.Bool("dry-run", false, "whether to run in dry run mode")
 	minNodesPtr := flag.Int("min-nodes", 5, "the minimum number of nodes, skip evaluation if at or below this level")
+	kubeConfigPtr := flag.String("kubeconfig", "/Users/briankopp/.kube/config", "path to kube config file")
 	flag.Parse()
 
 	config := config.Settings{
@@ -50,7 +53,9 @@ func main() {
 		Msg("starting node-quarantine")
 
 	// get in cluster config
-	clusterConfig, err := rest.InClusterConfig()
+	// clusterConfig, err := rest.InClusterConfig()
+
+	clusterConfig, err := clientcmd.BuildConfigFromFlags("", *kubeConfigPtr)
 	if err != nil {
 		log.Error().Err(err).Msg("error getting in cluster config")
 		os.Exit(1)
@@ -71,6 +76,10 @@ func main() {
 	}()
 
 	// TODO add liveness & readiness checks, and metrics endpoint for prometheus
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT)
+	<-done
 }
 
 func runForever(evaluator node.Evaluator, nodeClient node.Client, config config.Settings) {
@@ -102,10 +111,15 @@ func runSingleEvaluation(evaluator node.Evaluator, nodeClient node.Client, confi
 		return false, nil
 	}
 
-	utilizations := node.GetNodeUtilizations(nodes)
+	utilizations, err := nodeClient.GetNodeUtilizations(nodes)
+	if err != nil {
+		log.Error().Err(err).Msg("error getting node utilizations")
+		return false, err
+	}
+
 	log.Info().Msg("acquired node utilizations")
 	for _, util := range utilizations {
-		log.Info().Msg(fmt.Sprintf("utilization for %v - %v", util.Name, util.MaxUtilization))
+		log.Info().Msg(fmt.Sprintf("utilization for %v - %.0f", util.Name, 100*util.MaxUtilization))
 	}
 	evaluator.UpdateUnderUtilizedNodes(utilizations, time.Now())
 

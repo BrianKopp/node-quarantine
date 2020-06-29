@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quarantine
+  labels:
+    app: quarantine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: quarantine
+  template:
+    metadata:
+      labels:
+        app: quarantine
+    spec:
+      containers:
+      - name: quarantine
+        image: briankopp/node-quarantine:dev
+        command:
+          - /app
+          - --debug
+          - --dry-run
+          - --threshold=0.9
+          - --min-nodes=0
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
